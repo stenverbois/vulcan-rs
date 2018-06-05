@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "vulcan",
+    "enclaves/attestation-server",
+    "enclaves/logging",
+    ]
