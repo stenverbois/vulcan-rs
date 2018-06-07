@@ -1,0 +1,19 @@
+[package]
+name = "vulcan-logging"
+version = "0.1.0"
+authors = ["Sten Verbois <stenverbois@gmail.com>"]
+
+[lib]
+name = "vulcan_logging"
+crate-type = ["staticlib"]
+
+[dependencies]
+vulcan = { version = "0.1", path = "../../../vulcan-rs" }
+lazy_static = { path = "../../../../rust-sgx-sdk/third_party/lazy-static.rs" }
+# [target.'cfg(feature = "sgx")'.dependencies]
+sgx_tstd = { path = "../../../../rust-sgx-sdk/sgx_tstd" }
+byteorder = { version = "1.2", default-features = false }
+
+[features]
+default = []
+sgx = []

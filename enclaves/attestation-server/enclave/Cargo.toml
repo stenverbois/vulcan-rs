@@ -1,0 +1,20 @@
+[package]
+name = "vulcan-attestation"
+version = "0.1.0"
+authors = ["Sten Verbois <stenverbois@gmail.com>"]
+
+[lib]
+name = "vulcan_attestation"
+crate-type = ["staticlib"]
+
+[dependencies]
+lazy_static = { path = "../../../../rust-sgx-sdk/third_party/lazy-static.rs" }
+sgx_tstd = { path = "../../../../rust-sgx-sdk/sgx_tstd" }
+sgx_rand = { path = "../../../../rust-sgx-sdk/sgx_rand" }
+sgx_rand_derive = { path = "../../../../rust-sgx-sdk/sgx_rand_derive" }
+byteorder = { version = "1.2", default-features = false }
+vulcan = { version = "0.1", path = "../../../vulcan-rs" }
+
+[features]
+default = []
+sgx = []
