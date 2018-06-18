@@ -168,7 +168,7 @@ enclave/Enclave_t.o: enclave/Enclave_t.c
 	@echo "CC   <=  $<"
 
 $(RustEnclave_Name): enclave compiler-rt enclave/Enclave_t.o sgx_ustdc
-	cp ./enclave/target/release/lib${ENCLAVE_LIB_NAME}.a ./lib
+	cp ../../target/release/lib${ENCLAVE_LIB_NAME}.a ./lib
 	cp $(RUST_SGX_SDK)/compiler-rt/libcompiler-rt-patch.a ./lib
 	@$(CXX) enclave/Enclave_t.o -o $@ $(RustEnclave_Link_Flags)
 	@echo "LINK =>  $@"

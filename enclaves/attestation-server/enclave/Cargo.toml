@@ -13,7 +13,7 @@ sgx_tstd = { path = "../../../../rust-sgx-sdk/sgx_tstd" }
 sgx_rand = { path = "../../../../rust-sgx-sdk/sgx_rand" }
 sgx_rand_derive = { path = "../../../../rust-sgx-sdk/sgx_rand_derive" }
 byteorder = { version = "1.2", default-features = false }
-vulcan = { version = "0.1", path = "../../../vulcan-rs" }
+vulcan = { version = "0.1", path = "../../../vulcan" }
 
 [features]
 default = []
