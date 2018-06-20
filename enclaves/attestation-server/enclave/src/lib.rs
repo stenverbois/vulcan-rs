@@ -12,21 +12,17 @@ extern crate sgx_rand;
 #[macro_use]
 extern crate sgx_rand_derive;
 
-use std::slice;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::{stdout, Write};
+use std::slice;
 use std::sync::SgxMutex;
 use std::vec::Vec;
 
-use byteorder::{ByteOrder, LittleEndian, BigEndian};
+use byteorder::{ByteOrder, LittleEndian};
 
 use vulcan::*;
 use vulcan::spongent::*;
-
-const CAN_ID_PING: u16 = 0xf0;
-const CAN_ID_PONG: u16 = 0xf8;
-const CAN_ID_AEC_SEND: u16 = 0xaa;
-const CAN_ID_AEC_RECV: u16 = 0xbb;
 
 const CAN_ID_ATTEST_SEND: u16 = 0x555;
 const CAN_ID_ATTEST_RECV: u16 = 0x556;
@@ -57,7 +53,7 @@ lazy_static! {
         SgxMutex::new(Vec::new());
 
     // Maps PM identifiers
-    static ref NONCE_MACS: SgxMutex<HashMap<u16, Vec<(u16, [u8; CAN_PAYLOAD_SIZE])>>> =
+    static ref RESPONSE_MACS: SgxMutex<HashMap<u16, Vec<(u16, [u8; CAN_PAYLOAD_SIZE])>>> =
         SgxMutex::new(HashMap::new());
 
     static ref EXPECT_MAC: SgxMutex<Option<(u16, u16)>> =
@@ -71,40 +67,35 @@ struct Key([u8; SANCUS_KEY_SIZE]);
 fn build_key_distribution_sequence(id_pm: u16, key_pm: &SancusKey, id_conn: u16, key_conn: &SancusKey) -> (impl Iterator<Item=CANPayload>, CANPayload) {
     let mut sequence: [CANPayload; 5] = [[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]; 5];
 
+    println!("Building key distribution sequence for PM ID {:#02X} and connection ID {:#X}", id_pm, id_conn);
+    print!("Connection key: ");
+    for &byte in key_conn.iter() {
+        print!("{:02x}", byte);
+    }
+    println!("");
+
     let mut id_pm_buf = [0; 2];
     LittleEndian::write_u16(&mut id_pm_buf, id_pm);
 
     let mut id_conn_buf = [0; 2];
     LittleEndian::write_u16(&mut id_conn_buf, id_conn);
 
-    println!("Connection key: ");
-    for &byte in key_conn.iter() {
-        print!("{:02x}", byte);
-    }
-    println!("");
+    // Size of payload to encrypt is first three messages except for the PM identifier
+    let mut payload_to_encrypt = [0x00; 8 * 3 - 2];
+    payload_to_encrypt[..2].clone_from_slice(&id_conn_buf);
+    payload_to_encrypt[6..].clone_from_slice(key_conn);
 
     let mut payload = [0x00; 8 * 3];
     payload[..2].clone_from_slice(&id_pm_buf);
-    payload[2..4].clone_from_slice(&id_conn_buf);
-    payload[8..].clone_from_slice(key_conn);
-
-    let mut payload_encrypted = [0x00; 8 * 3];
-    let mac = spongent_wrap(key_pm, &[0x00, 0x00, 0x00, 0x00], &payload, &mut payload_encrypted, false).unwrap();
+    let mac = spongent_wrap(key_pm, &[0x00, 0x00, 0x00, 0x00], &payload_to_encrypt, &mut payload[2..], false).unwrap();
 
     // TODO impl Default?
     let mut expected_nonce_mac: CANPayload = [0x00; CAN_PAYLOAD_SIZE];
-    let x = spongent_mac(key_conn, &[0xA7, 0x7E, 0x57, 0xED]).unwrap();
     expected_nonce_mac.clone_from_slice(&spongent_mac(key_conn, &[0xA7, 0x7E, 0x57, 0xED]).unwrap()[8..]);
 
-    print!("Expected calced for {:?}-{:?}: ", id_pm, id_conn);
-    for &byte in &x {
-        print!("{:02x}", byte);
-    }
-    println!("");
-
-    sequence[0].copy_from_slice(&payload_encrypted[0..8]);
-    sequence[1].copy_from_slice(&payload_encrypted[8..16]);
-    sequence[2].copy_from_slice(&payload_encrypted[16..24]);
+    sequence[0].copy_from_slice(&payload[0..8]);
+    sequence[1].copy_from_slice(&payload[8..16]);
+    sequence[2].copy_from_slice(&payload[16..24]);
     
     sequence[3].copy_from_slice(&mac[..8]);
     sequence[4].copy_from_slice(&mac[8..]);
@@ -112,33 +103,21 @@ fn build_key_distribution_sequence(id_pm: u16, key_pm: &SancusKey, id_conn: u16,
     (sequence.to_vec().into_iter(), expected_nonce_mac)
 }
 
-fn handle_key_request(id: u16) {
-    println!("Got key request for: {:X}", id);
-
-    let nonce = sgx_rand::random::<u64>();
-
-    println!("Nonce generated: {:X}", nonce);
-
-    let mut nonce_buf = [0; 8];
-    LittleEndian::write_u64(&mut nonce_buf, nonce);
-
-    /* TODO Update for new key mgmt
-    let mut nonce_buf_encrypted = [0; 8];
-    let mac = spongent_wrap(&SM_KEY_PING, &[0x11, 0x22], &nonce_buf, &mut nonce_buf_encrypted, false).unwrap();
-
-    let mut context = VULCAN.lock().unwrap();
-    context.send(CAN_ID_ATTEST_SEND, &nonce_buf_encrypted);
-    */
-}
-
 #[no_mangle]
 pub extern "C" fn initialize() -> u32 {
-    // Store node specific keys K_PM
+    // -- Start topology data
     // TODO Should be retrieved from confidentiallity and integrity protected
     // storage
     let mut pm_keys = PM_KEYS.lock().unwrap();
-    pm_keys.insert(0x01, [0x3d, 0x52, 0xa7, 0x75, 0x27, 0x98, 0xb7, 0xed, 0x83, 0xb5, 0xf9, 0x0b, 0x70, 0x83, 0x2c, 0x4a]);
-    pm_keys.insert(0x02, [0x38, 0x2b, 0xa6, 0x3f, 0xd3, 0x85, 0x70, 0xfa, 0x1c, 0xfa, 0x43, 0xf7, 0x99, 0x1b, 0xd7, 0xf6]);
+    pm_keys.insert(0x01, [0xd3, 0xcc, 0x86, 0x67, 0x57, 0x82, 0xc3, 0xde, 0x8d, 0xc2, 0x8a, 0x21, 0x29, 0x9f, 0x43, 0xac]);
+    pm_keys.insert(0x02, [0xd8, 0x3a, 0x77, 0x70, 0xe8, 0xc4, 0xa3, 0x42, 0x1e, 0xc7, 0x91, 0x89, 0xbc, 0x34, 0xd2, 0xbb]);
+
+    const CAN_ID_PING: u16 = 0xf0;
+    const CAN_ID_PONG: u16 = 0xf8;
+    const CAN_ID_AEC_SEND: u16 = 0xaa;
+    const CAN_ID_AEC_RECV: u16 = 0xbb;
+
+    // -- End topology data
 
     // Randomly generate connection keys for all connections
     let mut connection_keys = CONNECTION_KEYS.lock().unwrap();
@@ -161,20 +140,22 @@ pub extern "C" fn initialize() -> u32 {
     participation.push((0x01, connection_set.clone()));
     participation.push((0x02, connection_set.clone())); 
 
-    // let mut context = VULCAN.lock().unwrap();
-    let mut nonce_macs = NONCE_MACS.lock().unwrap();
+    let mut response_macs = RESPONSE_MACS.lock().unwrap();
 
     for &(id_pm, ref connections) in participation.iter() {
         let key_pm = pm_keys.get(&id_pm).expect("Missing K_PM for connection participant");
-        nonce_macs.insert(id_pm, Vec::new());
+        response_macs.insert(id_pm, Vec::new());
         for id_conn in connections {
             let key_conn = connection_keys.get(&id_conn).expect("Missing connection key");
 
             let (sequence, expected_nonce_mac) = build_key_distribution_sequence(id_pm, &key_pm, *id_conn, &key_conn);
-            nonce_macs.get_mut(&id_pm).unwrap().push((*id_conn, expected_nonce_mac));
-            for msg in sequence {
+            response_macs.get_mut(&id_pm).unwrap().push((*id_conn, expected_nonce_mac));
+            for (idx, msg) in sequence.enumerate() {
+                print!("\rSending message {}/5 of sequence...", idx + 1);
+                let _ = stdout().flush();
                 vulcan_send(CAN_ID_ATTEST_SEND as u32, &msg);
             }
+            println!("");
         }
     }
 
@@ -189,26 +170,19 @@ pub extern "C" fn recv_message(eid: u32, dlen: u32, data: *const u8) -> u16 {
     };
 
     if eid as u16 == CAN_ID_ATTEST_RECV {
-        print!("AS received: ");
-        for &byte in data.iter() {
-            print!("{:02x}", byte);
-        }
-        println!("");
-
         let mut expect_mac = EXPECT_MAC.lock().unwrap();
-        let mut nonce_macs = NONCE_MACS.lock().unwrap();
+        let mut response_macs = RESPONSE_MACS.lock().unwrap();
 
         match *expect_mac {
             None => {
                 let pm_id = LittleEndian::read_u16(&data[0..2]);
                 let connection_id = LittleEndian::read_u16(&data[2..4]);
-                println!("Expecting nonce mac for conn {:x} for pm {:x}", connection_id, pm_id);
+                // println!("Expecting response mac for conn {:#X} for pm {:#X}", connection_id, pm_id);
                 *expect_mac = Some((pm_id, connection_id));
             }
             Some((pm_id, conn_id)) => {
-                let pos = match nonce_macs.get_mut(&pm_id).expect("No nonce macs stored for id").iter().position(|&(cid, _)| cid == conn_id) {
+                let pos = match response_macs.get_mut(&pm_id).expect("No nonce macs stored for id").iter().position(|&(cid, _)| cid == conn_id) {
                     Some(x) => {
-                        println!("Attested connection {:x} for pm {:x}", conn_id,  pm_id);
                         x
                     },
                     None => {
@@ -217,20 +191,19 @@ pub extern "C" fn recv_message(eid: u32, dlen: u32, data: *const u8) -> u16 {
                     }
                 };
 
-                println!("expecting: ");
-                for &byte in &nonce_macs.get_mut(&pm_id).unwrap().get(pos).unwrap().1 {
-                    print!("{:02x}", byte);
-                }
-                println!("");
+                // FIXME Disabled because of unreliable reponses from Sancus PMs.
+                // FIXME PM should only be attested of MAC matches expected MAC.
+                // if response_macs.get_mut(&pm_id).unwrap().get(pos).unwrap().1 == data {
+                //     println!("MACs match");
+                // }
+                // else {
+                //     println!("MACs don't match");
+                // }
+                
 
-                if nonce_macs.get_mut(&pm_id).unwrap().get(pos).unwrap().1 == data {
-                    println!("MACs match");
-                }
-                else {
-                    println!("MACs don't match");
-                }
+                println!("Attested connection {:#X} for PM {:#02X}", conn_id,  pm_id);
 
-                nonce_macs.get_mut(&pm_id).unwrap().remove(pos);
+                response_macs.get_mut(&pm_id).unwrap().remove(pos);
                 *expect_mac = None;
             }
         }

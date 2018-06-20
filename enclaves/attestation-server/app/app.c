@@ -200,20 +200,16 @@ void can_send(uint32_t id, size_t dlen, uint8_t *data) {
     frame.len = dlen;
     frame.flags = 0x00;
 
-    printf("Sending: %X - ", id);
-
     for(i = 0; i < dlen; i++) {
         frame.data[i] = data[i];
-        printf("%02x", data[i]);
     }
-    printf("\n");
 
     // TODO loop over sockets?
     if (write(s[0], &frame, CAN_MTU) != CAN_MTU) {
         perror("write");
-        // TODO return 1;
     }
 
+    // Introduce delay for demo purposes.
     sleep(1);
 }
 
@@ -683,7 +679,7 @@ int main(int argc, char **argv)
 
                 // Send to enclave
 
-                printf("[C] can_id = %X, len = %d, flags = %X\n", frame.can_id, frame.len, frame.flags);
+                // printf("[C] can_id = %X, len = %d, flags = %X\n", frame.can_id, frame.len, frame.flags);
 
                 sgx_ret = recv_message(global_eid, &eret, frame.can_id, frame.len, frame.data);
 
