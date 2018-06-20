@@ -1,0 +1,8 @@
+[package]
+name = "vulcan"
+version = "0.1.0"
+authors = ["Sten Verbois <stenverbois@gmail.com>"]
+
+[dependencies]
+byteorder = { version = "1.1", default-features = false }
+spongent = { version = "0.1", git = "https://github.com/stenverbois/spongent-rs" }
