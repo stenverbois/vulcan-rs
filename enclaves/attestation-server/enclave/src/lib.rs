@@ -21,13 +21,13 @@ use std::vec::Vec;
 
 use byteorder::{ByteOrder, LittleEndian};
 
-use vulcan::*;
 use vulcan::spongent::*;
+use vulcan::*;
 
 const CAN_ID_ATTEST_SEND: u16 = 0x555;
 const CAN_ID_ATTEST_RECV: u16 = 0x556;
 
-extern {
+extern "C" {
     fn can_send(id: u32, dlen: usize, data: *const u8);
 }
 
@@ -48,7 +48,7 @@ lazy_static! {
         SgxMutex::new(HashMap::new())
     };
 
-    // Maps connection identifiers to set of participating PM identifiers 
+    // Maps connection identifiers to set of participating PM identifiers
     static ref PARTICIPATION: SgxMutex<Vec<(u16, HashSet<u16>)>> =
         SgxMutex::new(Vec::new());
 
@@ -64,10 +64,18 @@ lazy_static! {
 struct Key([u8; SANCUS_KEY_SIZE]);
 
 /// Returns a tuple containing the key distribution sequence and the expected nonce mac.
-fn build_key_distribution_sequence(id_pm: u16, key_pm: &SancusKey, id_conn: u16, key_conn: &SancusKey) -> (impl Iterator<Item=CANPayload>, CANPayload) {
+fn build_key_distribution_sequence(
+    id_pm: u16,
+    key_pm: &SancusKey,
+    id_conn: u16,
+    key_conn: &SancusKey,
+) -> (impl Iterator<Item = CANPayload>, CANPayload) {
     let mut sequence: [CANPayload; 5] = [[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]; 5];
 
-    println!("Building key distribution sequence for PM ID {:#02X} and connection ID {:#X}", id_pm, id_conn);
+    println!(
+        "Building key distribution sequence for PM ID {:#02X} and connection ID {:#X}",
+        id_pm, id_conn
+    );
     print!("Connection key: ");
     for &byte in key_conn.iter() {
         print!("{:02x}", byte);
@@ -87,16 +95,23 @@ fn build_key_distribution_sequence(id_pm: u16, key_pm: &SancusKey, id_conn: u16,
 
     let mut payload = [0x00; 8 * 3];
     payload[..2].clone_from_slice(&id_pm_buf);
-    let mac = spongent_wrap(key_pm, &[0x00, 0x00, 0x00, 0x00], &payload_to_encrypt, &mut payload[2..], false).unwrap();
+    let mac = spongent_wrap(
+        key_pm,
+        &[0x00, 0x00, 0x00, 0x00],
+        &payload_to_encrypt,
+        &mut payload[2..],
+        false,
+    ).unwrap();
 
     // TODO impl Default?
     let mut expected_nonce_mac: CANPayload = [0x00; CAN_PAYLOAD_SIZE];
-    expected_nonce_mac.clone_from_slice(&spongent_mac(key_conn, &[0xA7, 0x7E, 0x57, 0xED]).unwrap()[8..]);
+    expected_nonce_mac
+        .clone_from_slice(&spongent_mac(key_conn, &[0xA7, 0x7E, 0x57, 0xED]).unwrap()[8..]);
 
     sequence[0].copy_from_slice(&payload[0..8]);
     sequence[1].copy_from_slice(&payload[8..16]);
     sequence[2].copy_from_slice(&payload[16..24]);
-    
+
     sequence[3].copy_from_slice(&mac[..8]);
     sequence[4].copy_from_slice(&mac[8..]);
 
@@ -109,8 +124,20 @@ pub extern "C" fn initialize() -> u32 {
     // TODO Should be retrieved from confidentiallity and integrity protected
     // storage
     let mut pm_keys = PM_KEYS.lock().unwrap();
-    pm_keys.insert(0x01, [0xd3, 0xcc, 0x86, 0x67, 0x57, 0x82, 0xc3, 0xde, 0x8d, 0xc2, 0x8a, 0x21, 0x29, 0x9f, 0x43, 0xac]);
-    pm_keys.insert(0x02, [0xd8, 0x3a, 0x77, 0x70, 0xe8, 0xc4, 0xa3, 0x42, 0x1e, 0xc7, 0x91, 0x89, 0xbc, 0x34, 0xd2, 0xbb]);
+    pm_keys.insert(
+        0x01,
+        [
+            0xd3, 0xcc, 0x86, 0x67, 0x57, 0x82, 0xc3, 0xde, 0x8d, 0xc2, 0x8a, 0x21, 0x29, 0x9f,
+            0x43, 0xac,
+        ],
+    );
+    pm_keys.insert(
+        0x02,
+        [
+            0xd8, 0x3a, 0x77, 0x70, 0xe8, 0xc4, 0xa3, 0x42, 0x1e, 0xc7, 0x91, 0x89, 0xbc, 0x34,
+            0xd2, 0xbb,
+        ],
+    );
 
     const CAN_ID_PING: u16 = 0xf0;
     const CAN_ID_PONG: u16 = 0xf8;
@@ -138,18 +165,26 @@ pub extern "C" fn initialize() -> u32 {
 
     // Push id for ecu-send first because it waits for sync message from ecu-recv.
     participation.push((0x01, connection_set.clone()));
-    participation.push((0x02, connection_set.clone())); 
+    participation.push((0x02, connection_set.clone()));
 
     let mut response_macs = RESPONSE_MACS.lock().unwrap();
 
     for &(id_pm, ref connections) in participation.iter() {
-        let key_pm = pm_keys.get(&id_pm).expect("Missing K_PM for connection participant");
+        let key_pm = pm_keys
+            .get(&id_pm)
+            .expect("Missing K_PM for connection participant");
         response_macs.insert(id_pm, Vec::new());
         for id_conn in connections {
-            let key_conn = connection_keys.get(&id_conn).expect("Missing connection key");
+            let key_conn = connection_keys
+                .get(&id_conn)
+                .expect("Missing connection key");
 
-            let (sequence, expected_nonce_mac) = build_key_distribution_sequence(id_pm, &key_pm, *id_conn, &key_conn);
-            response_macs.get_mut(&id_pm).unwrap().push((*id_conn, expected_nonce_mac));
+            let (sequence, expected_nonce_mac) =
+                build_key_distribution_sequence(id_pm, &key_pm, *id_conn, &key_conn);
+            response_macs
+                .get_mut(&id_pm)
+                .unwrap()
+                .push((*id_conn, expected_nonce_mac));
             for (idx, msg) in sequence.enumerate() {
                 print!("\rSending message {}/5 of sequence...", idx + 1);
                 let _ = stdout().flush();
@@ -165,9 +200,7 @@ pub extern "C" fn initialize() -> u32 {
 #[no_mangle]
 pub extern "C" fn recv_message(eid: u32, dlen: u32, data: *const u8) -> u16 {
     // Construct slice from raw pointer
-    let data = unsafe {
-        slice::from_raw_parts(data, dlen as usize)
-    };
+    let data = unsafe { slice::from_raw_parts(data, dlen as usize) };
 
     if eid as u16 == CAN_ID_ATTEST_RECV {
         let mut expect_mac = EXPECT_MAC.lock().unwrap();
@@ -181,10 +214,13 @@ pub extern "C" fn recv_message(eid: u32, dlen: u32, data: *const u8) -> u16 {
                 *expect_mac = Some((pm_id, connection_id));
             }
             Some((pm_id, conn_id)) => {
-                let pos = match response_macs.get_mut(&pm_id).expect("No nonce macs stored for id").iter().position(|&(cid, _)| cid == conn_id) {
-                    Some(x) => {
-                        x
-                    },
+                let pos = match response_macs
+                    .get_mut(&pm_id)
+                    .expect("No nonce macs stored for id")
+                    .iter()
+                    .position(|&(cid, _)| cid == conn_id)
+                {
+                    Some(x) => x,
                     None => {
                         println!("Can't find connection id");
                         return 0;
@@ -199,9 +235,8 @@ pub extern "C" fn recv_message(eid: u32, dlen: u32, data: *const u8) -> u16 {
                 // else {
                 //     println!("MACs don't match");
                 // }
-                
 
-                println!("Attested connection {:#X} for PM {:#02X}", conn_id,  pm_id);
+                println!("Attested connection {:#X} for PM {:#02X}", conn_id, pm_id);
 
                 response_macs.get_mut(&pm_id).unwrap().remove(pos);
                 *expect_mac = None;

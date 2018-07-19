@@ -25,16 +25,17 @@ pub enum Event {
 pub trait VulCANContext {
     type ProtocolInfo;
 
-    // fn send_fn() -> fn(u32, &[u8]);
+    /// Initializes the connections of the VulCANContext.
     fn init(&mut self);
+
+    /// Sends an authenticated CAN frame containing the payload `msg` on the specified `id`.
     fn auth_send(&mut self, id: u16, msg: &[u8]);
+
+    /// Receives a CAN frame into the authentication context.
     fn auth_recv(&mut self, eid: u32, msg: &[u8]) -> Result<Event, ()>;
 
+    /// Sends an unauthenticated CAN frame containing the payload `msg` on the specified `id`.
     fn send(&mut self, id: u16, msg: &[u8]);
-
-    // TODO change to these
-    // fn auth_send(&mut self, connection: &mut Self::ProtocolInfo, msg: &[u8]);
-    //fn send(&mut self, connection: &mut Self::ProtocolInfo, msg: &[u8]);
 }
 
 pub fn leia<S>(

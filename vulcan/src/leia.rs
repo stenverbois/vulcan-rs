@@ -67,11 +67,7 @@ where
 // Ergonomics. Use LeiAStore as alias for specific VulCANStore.
 // @Fixme: Use trait aliasing https://github.com/rust-lang/rust/issues/41517
 pub trait LeiAStore: VulCANStore<K = u16, V = [u8; CAN_PAYLOAD_SIZE]> {}
-impl<T> LeiAStore for T
-where
-    T: VulCANStore<K = u16, V = [u8; CAN_PAYLOAD_SIZE]>,
-{
-}
+impl<T> LeiAStore for T where T: VulCANStore<K = u16, V = [u8; CAN_PAYLOAD_SIZE]> {}
 
 impl<'a, S> LeiAContext<S>
 where
@@ -105,22 +101,26 @@ where
         self
     }
 
-    // @TODO Needs pub?
+    /// Sends authenticated message on provided id.
     pub fn leia_auth_send(&mut self, id: u16, msg: &[u8], is_aec: bool) {
         let (cmd, cmd_mac) = if !is_aec {
             (LeiACmd::Data, LeiACmd::Mac)
         } else {
             (LeiACmd::AecEpoch, LeiACmd::AecMac)
         };
-        
+
         let send = self.send;
-        
+
         let connection = self.find_connection(id).unwrap();
 
         let eid = build_eid(connection.id, cmd, connection.c);
         (send)(eid, msg);
 
-        let id_mac = if is_aec { connection.id } else { connection.id + 1 };
+        let id_mac = if is_aec {
+            connection.id
+        } else {
+            connection.id + 1
+        };
 
         let eid_mac = build_eid(id_mac, cmd_mac, connection.c);
         let msg_mac = mac_create(&connection.k_e, connection.id, msg, connection.c);
@@ -129,6 +129,7 @@ where
         update_counters(connection);
     }
 
+    /// Sends AUTH_FAIL error frame on provided id.
     pub fn leia_auth_fail_send(&mut self, id: u16) {
         let aec_id = self.aec.id;
         let aec_epoch = self.aec.epoch;
@@ -155,6 +156,7 @@ where
         self.leia_auth_send(aec_id, &msg, true);
     }
 
+    /// Called when an auth fail response has been received.
     pub fn leia_auth_fail_receive(&mut self, id: u16, epoch: u64) {
         let connection = self.find_connection(id).unwrap();
 
@@ -165,6 +167,7 @@ where
         }
     }
 
+    /// Responds to a received AUTH_FAIL frame.
     pub fn leia_auth_fail_send_response(&mut self, id: u16) {
         let epoch = {
             let connection = self.find_connection(id).unwrap();
@@ -182,18 +185,20 @@ where
     // Finds the connection with the specified id
     fn find_connection(&mut self, id: u16) -> Option<&mut LeiAConnection> {
         // @Cleanup: When Rust-sgx-sdk compiles with a newer version of rustc
-        // than 1.22 nightly, we could so something like this with option filter:
+        // than 1.22 nightly, something like this could be used with option filter:
         // self.connections.iter_mut()
         //     .find(|ref x| x.id == id)
         //     .or(Some(&mut self.aec).filter(|ref c| c.id == id))
-        
+
         let aec_id = self.aec.id;
 
+        let connection_opt = self.connections.iter_mut().find(|ref x| x.id == id);
 
-        let connection_opt = self.connections.iter_mut()
-            .find(|ref x| x.id == id);
-
-        let aec_opt = if self.aec.id == id { Some(&mut self.aec) } else { None };
+        let aec_opt = if self.aec.id == id {
+            Some(&mut self.aec)
+        } else {
+            None
+        };
 
         connection_opt.or(aec_opt)
     }
@@ -202,11 +207,11 @@ where
     fn add_expected_msg(&mut self, id: u16, counter: u16, data: &[u8]) -> [u8; 8] {
         let mac = {
             let mut connection = self.find_connection(id).unwrap();
-            
+
             // Set our counter to be the same as the incomming message.
             // This allows us to deal with desyncs < 1 epoch.
             connection.c = counter;
-            
+
             mac_create(&connection.k_e, id, data, counter)
         };
 
@@ -240,12 +245,7 @@ pub fn session_key_gen(cur: &mut LeiAConnection) {
 }
 
 // TODO id and counter are from cur?
-pub fn mac_create(
-    k_e: &SancusKey,
-    id: u16,
-    msg: &[u8],
-    counter: u16,
-) -> [u8; CAN_PAYLOAD_SIZE] {
+pub fn mac_create(k_e: &SancusKey, id: u16, msg: &[u8], counter: u16) -> [u8; CAN_PAYLOAD_SIZE] {
     let mut ad = [0; LEIA_AD_SIZE];
     let mut buf = [0; 2];
 
@@ -294,12 +294,14 @@ where
         let (id, cmd, counter) = parse_eid(eid).ok_or(())?;
 
         // @TODO: Also aec variants here?
-        if (self.find_connection(id).is_none() && cmd == LeiACmd::Data) || (self.find_connection(id - 1).is_none() && cmd == LeiACmd::Mac) {
+        if (self.find_connection(id).is_none() && cmd == LeiACmd::Data)
+            || (self.find_connection(id - 1).is_none() && cmd == LeiACmd::Mac)
+        {
             return Ok(Event::UnknownId(id));
         }
-            
+
         let mut ret = Event::Received(id, None);
-        
+
         // @TODO Cleanup with one in LeiACmd::Mac
         let msg_id = if id == self.aec.id { id } else { id - 1 };
 
@@ -310,12 +312,11 @@ where
                     self.leia_auth_fail_send(id);
                     return Ok(Event::Desync(id));
                 }
-                
+
                 if self.expected.contains_key(&id) {
                     let mac = self.add_expected_msg(id, counter, &msg);
                     ret = Event::MissingMAC(id);
-                }
-                else {
+                } else {
                     let mac = self.add_expected_msg(id, counter, &msg);
                     ret = Event::Received(id, Some(mac));
                 }
@@ -323,21 +324,24 @@ where
             LeiACmd::Mac => {
                 // @Temp @Hack: Accounting for bug in demo application log file.
                 // @Temp @Hack: msg_id should always be id - 1.
-                let msg_id = if self.expected.contains_key(&(id - 1)) { id - 1 } else { id };
+                let msg_id = if self.expected.contains_key(&(id - 1)) {
+                    id - 1
+                } else {
+                    id
+                };
                 if self.expected.contains_key(&msg_id) {
                     if self.expected.get(&msg_id).unwrap() == msg {
                         ret = Event::Authenticated(msg_id);
 
                         // @TODO: Do this in update_counters?
                         let connection = self.find_connection(msg_id).unwrap();
-                        // update_counters(connection);
+                    // update_counters(connection);
                     } else {
                         ret = Event::IncorrectMAC(msg_id);
 
                         self.leia_auth_fail_send(msg_id);
                     }
-                }
-                else {
+                } else {
                     ret = Event::UnexpectedMAC(msg_id);
                 }
 
@@ -367,7 +371,9 @@ where
                         }
 
                         let debug = {
-                            let connection = self.find_connection(msg_id).expect("No connection with specified id.");
+                            let connection = self
+                                .find_connection(msg_id)
+                                .expect("No connection with specified id.");
                             connection.auth_fail_in_progress = false;
 
                             connection.epoch
@@ -375,8 +381,7 @@ where
 
                         ret = Event::Debug(debug);
                     }
-                }
-                else {
+                } else {
                     ret = Event::UnexpectedMAC(msg_id);
                 }
 
